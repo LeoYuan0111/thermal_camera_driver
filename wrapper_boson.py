@@ -1,44 +1,102 @@
+"""
+FLIR Boson Thermal Camera Wrapper with Telemetry Support
+
+This module provides a wrapper class for FLIR Boson thermal cameras that extends
+the base ThreadedBoson class with telemetry logging capabilities.
+
+Author: [Your Name]
+Date: January 2026
+"""
+
 import cv2
 import time
 import logging
 import numpy as np
+from typing import Optional, Tuple
 
 from flirpy.camera.threadedboson import ThreadedBoson
 
 
 class BosonWithTelemetry(ThreadedBoson):
-    def __init__(self, device=None, port=None, baudrate=921600, loglevel=logging.WARNING):
+    """
+    Enhanced FLIR Boson camera wrapper with telemetry logging support.
+    
+    This class extends ThreadedBoson to provide additional functionality for:
+    - Logging thermal frames and timestamps
+    - Extracting telemetry data from camera frames
+    - Synchronized timestamp management
+    
+    Attributes:
+        logged_images (list): List of captured thermal frames
+        logged_tstamps (list): List of corresponding timestamps
+        enable_logging (bool): Flag to control data logging
+        timestamp_offset (float): Offset between system and camera timestamps
+    """
+    def __init__(self, device: Optional[int] = None, port: Optional[str] = None, 
+                 baudrate: int = 921600, loglevel: int = logging.WARNING):
+        """
+        Initialize the Boson camera with telemetry support.
+        
+        Args:
+            device: Camera device index (default: None for auto-detection)
+            port: Serial port for communication (default: None)
+            baudrate: Serial communication baud rate (default: 921600)
+            loglevel: Logging level (default: logging.WARNING)
+        """
         super().__init__(device=device, port=port, baudrate=baudrate, loglevel=loglevel)
 
         self.configure()
         self.start()
-        self.camera.do_ffc()
+        self.camera.do_ffc()  # Perform initial flat field correction
+        
+        # Initialize logging attributes
         self.logged_images = []
         self.logged_tstamps = []
         self.enable_logging = False
 
     def __del__(self):
+        """Cleanup resources when object is destroyed."""
         self.stop()
         self.camera.close()
     
-    def stop_logging(self):
+    def stop_logging(self) -> None:
+        """Stop logging thermal frames and timestamps."""
         self.enable_logging = False
 
-    def start_logging(self):
+    def start_logging(self) -> None:
+        """Start logging thermal frames and timestamps."""
         self.enable_logging = True
         self.add_post_callback(self.post_cap_hook)
     
-    def post_cap_hook(self, image):
+    def post_cap_hook(self, image: np.ndarray) -> None:
+        """
+        Callback function executed after each frame capture.
+        
+        Args:
+            image: Captured thermal image array
+        """
         if self.enable_logging:
             self.logged_images.append(image)
             self.logged_tstamps.append(time.time())
 
-    def compute_timestamp_offset(self):
+    def compute_timestamp_offset(self) -> None:
+        """
+        Compute the offset between system time and camera timestamp.
+        This ensures synchronized timestamps across different time sources.
+        """
         (_, latest_image), system_time = self.camera.cap.read(), time.time()
         _, cam_timestamp = self.parse_telemetry(latest_image[:2, :])
         self.timestamp_offset = system_time - cam_timestamp
 
-    def configure(self):
+    def configure(self) -> None:
+        """
+        Configure camera settings for optimal thermal imaging.
+        
+        Sets up:
+        - Frame dimensions (640x514 including telemetry rows)
+        - Y16 format for 16-bit thermal data
+        - Buffer size and RGB conversion settings
+        """
         self.camera.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.camera.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 514)
         self.camera.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'Y16 '))
@@ -48,7 +106,20 @@ class BosonWithTelemetry(ThreadedBoson):
 
         self.compute_timestamp_offset()
     
-    def get_next_image(self, hflip=False):
+    def get_next_image(self, hflip: bool = False) -> Tuple[np.ndarray, float, int, np.ndarray]:
+        """
+        Get the next thermal image with telemetry data.
+        
+        Args:
+            hflip: Whether to horizontally flip the image (default: False)
+            
+        Returns:
+            Tuple containing:
+            - image: Thermal image array (512x640)
+            - timestamp: Synchronized timestamp
+            - frame_number: Camera frame counter
+            - telemetry: Raw telemetry data array
+        """
         latest_image = self.latest()
 
         telemetry = latest_image[:2, :, 0]
@@ -60,7 +131,21 @@ class BosonWithTelemetry(ThreadedBoson):
             image = cv2.flip(image, 1)
         return image, timestamp, frame_number, telemetry
 
-    def parse_telemetry(self, telemetry):
+    def parse_telemetry(self, telemetry: np.ndarray) -> Tuple[int, float]:
+        """
+        Parse telemetry data from the camera frame header.
+        
+        The telemetry data is embedded in the first two rows of each frame
+        and contains frame counters and timestamps.
+        
+        Args:
+            telemetry: Telemetry data array (2x640)
+            
+        Returns:
+            Tuple containing:
+            - frame_counter: Sequential frame number from camera
+            - timestamp: Camera timestamp in seconds
+        """
         frame_counter = telemetry[0, 42] * 2**16 + telemetry[0, 43]
         timestamp_in_ms = telemetry[0, 140] * 2**16 + telemetry[0, 141]
         timestamp = timestamp_in_ms / 1000.0
@@ -69,24 +154,43 @@ class BosonWithTelemetry(ThreadedBoson):
     
 
 if __name__ == "__main__":
+    """
+    Demo script for live thermal camera visualization.
     
-    boson = BosonWithTelemetry()
+    Displays thermal camera feed with turbo colormap in real-time.
+    Press 'q' to quit the application.
+    """
+    print("Starting thermal camera live view...")
+    print("Press 'q' to quit")
     
-    cv2.namedWindow("Boson", cv2.WINDOW_NORMAL)
-    
-    while True:
-        image, timestamp, frame_number, _ = boson.get_next_image()
+    try:
+        boson = BosonWithTelemetry()
+        cv2.namedWindow("Boson Thermal Camera", cv2.WINDOW_NORMAL)
+        
+        while True:
+            image, timestamp, frame_number, _ = boson.get_next_image()
 
-        image = cv2.normalize(image, None, 0, 255, cv2.NORM_MINMAX)
-        image = np.uint8(image)
-        image = cv2.flip(image, 1)
-        image = cv2.applyColorMap(image, cv2.COLORMAP_TURBO)
-        print(f"Timestamp: {timestamp}, Frame number: {frame_number}\r", end="")
+            # Normalize and convert to 8-bit for display
+            image = cv2.normalize(image, None, 0, 255, cv2.NORM_MINMAX)
+            image = np.uint8(image)
+            image = cv2.flip(image, 1)  # Mirror image for natural viewing
+            image = cv2.applyColorMap(image, cv2.COLORMAP_TURBO)
+            
+            # Print frame info (overwrite previous line)
+            print(f"Timestamp: {timestamp:.3f}, Frame: {frame_number}\r", end="")
 
-        cv2.imshow("Boson", image)
-        key = cv2.waitKey(1)
-        if key == ord('q'):
-            break
+            cv2.imshow("Boson Thermal Camera", image)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                print("\nQuitting...")
+                break
+        
+    except Exception as e:
+        print(f"\nError: {e}")
+        print("Make sure the thermal camera is connected and accessible.")
     
-    boson.stop()
-    cv2.destroyAllWindows()
+    finally:
+        if 'boson' in locals():
+            boson.stop()
+        cv2.destroyAllWindows()
+        print("Camera stopped and windows closed.")

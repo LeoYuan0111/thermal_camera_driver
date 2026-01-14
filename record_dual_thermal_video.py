@@ -1,98 +1,295 @@
-import sys
-sys.path.append('../plantProj')
+"""
+Dual Thermal Camera Recording Script
 
+This script records synchronized thermal video data from two FLIR Boson cameras
+simultaneously with telemetry support.
+
+Usage:
+    python record_dual_thermal_video.py --output dual_recording.npz --duration 120
+
+Author: [Your Name]
+Date: January 2026
+"""
+
+import sys
 import argparse
-import json
 import time
+from typing import Optional, Tuple
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from pathlib import Path
+import zstandard as zstd
 
-from cameras.wrapper_boson import BosonWithTelemetry
+from wrapper_boson import BosonWithTelemetry
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Record thermal video from two Boson cameras.")
-    parser.add_argument('--output', type=str, help='Output file name.', required=True)
-    parser.add_argument('--duration', type=int, default=-1, help='Duration of the recording in seconds. Default is -1 (record until manually stopped).')
+
+def parse_args() -> argparse.Namespace:
+    """
+    Parse command line arguments.
+    
+    Returns:
+        Parsed arguments namespace
+    """
+    parser = argparse.ArgumentParser(
+        description="Record thermal video from two FLIR Boson cameras simultaneously.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    # Record for 2 minutes
+    python record_dual_thermal_video.py --output experiment_001.npz --duration 120
+    
+    # Record until manually stopped
+    python record_dual_thermal_video.py --output continuous_recording.npz
+    
+    # Record with compression
+    python record_dual_thermal_video.py --output compressed_data.npz --duration 60 --compress
+    
+Note:
+    - Cameras are expected on device 1 (COM4) and device 2 (COM6)
+    - Modify the device/port settings in the code if your setup differs
+    - Press any key during recording to stop early
+        """
+    )
+    parser.add_argument('--output', type=str, required=True,
+                       help='Output file name (stored in ./dual_data/ directory)')
+    parser.add_argument('--duration', type=int, default=-1,
+                       help='Duration in seconds. Use -1 for manual stop (default: -1)')
+    parser.add_argument('--compress', action='store_true',
+                       help='Compress output using zstandard compression')
     return parser.parse_args()
 
-def main():
-    args = parse_args()
 
-    output_path = "./dual_data/" / Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_file = str(output_path)
-
-    def shutdown_handler():
-        if 'thr_cam_obj_A' in locals():
-            thr_cam_obj_A.close()
-        if 'thr_cam_obj_B' in locals():
-            thr_cam_obj_B.close()
-        print("Cameras closed.")
-        sys.exit()
-
-    try:
-        thr_cam_obj_A = BosonWithTelemetry(device=1, port="COM4")
-    except:
-        print("Failed to connect to thermal camera A.")
-        shutdown_handler()
-    try:
-        thr_cam_obj_B = BosonWithTelemetry(device=2, port="COM6")
-    except:
-        print("Failed to connect to thermal camera B.")
-        shutdown_handler()
+def initialize_dual_cameras() -> Tuple[Optional[BosonWithTelemetry], Optional[BosonWithTelemetry]]:
+    """
+    Initialize both thermal cameras.
     
-    thr_cam_obj_A.camera.do_ffc()
-    thr_cam_obj_B.camera.do_ffc()
-    thr_cam_obj_A.camera.set_ffc_manual()
-    thr_cam_obj_B.camera.set_ffc_manual()
-    time.sleep(1)
-    print("Cameras connected, FFC performed and set to manual.")
+    Returns:
+        Tuple of (camera_A, camera_B) or (None, None) if initialization fails
+    """
+    camera_a = None
+    camera_b = None
+    
+    try:
+        print("Connecting to thermal camera A (device 1, COM4)...")
+        camera_a = BosonWithTelemetry(device=1, port="COM4")
+        print("Camera A connected successfully.")
+    except Exception as e:
+        print(f"Failed to connect to thermal camera A: {e}")
+        return None, None
+    
+    try:
+        print("Connecting to thermal camera B (device 2, COM6)...")
+        camera_b = BosonWithTelemetry(device=2, port="COM6")
+        print("Camera B connected successfully.")
+    except Exception as e:
+        print(f"Failed to connect to thermal camera B: {e}")
+        if camera_a:
+            camera_a.close()
+        return None, None
+    
+    # Configure both cameras
+    print("Performing flat field correction (FFC) on both cameras...")
+    camera_a.camera.do_ffc()
+    camera_b.camera.do_ffc()
+    camera_a.camera.set_ffc_manual()
+    camera_b.camera.set_ffc_manual()
+    time.sleep(1)  # Allow FFC to complete
+    
+    print("Both cameras connected and configured successfully.")
+    return camera_a, camera_b
 
-    start_recording = input("Press Enter to start recording...")
-    if start_recording.lower() == 'q':
-        print("Recording cancelled.")
-        shutdown_handler()
+
+def record_dual_thermal_data(camera_a: BosonWithTelemetry, 
+                           camera_b: BosonWithTelemetry, 
+                           duration: int) -> bool:
+    """
+    Record synchronized thermal data from both cameras.
+    
+    Args:
+        camera_a: First camera object
+        camera_b: Second camera object
+        duration: Recording duration in seconds (-1 for manual stop)
+        
+    Returns:
+        True if recording completed successfully, False otherwise
+    """
+    print(f"\nPreparing to record from both cameras...")
+    if duration > 0:
+        print(f"Duration: {duration} seconds")
+    else:
+        print("Duration: Until manually stopped")
+    
+    print("Press Enter to start recording, or 'q' to cancel...")
+    user_input = input().strip().lower()
+    if user_input == 'q':
+        print("Recording cancelled by user.")
+        return False
     
     try:
         start_time = time.time()
-        thr_cam_obj_A.start_logging()
-        thr_cam_obj_B.start_logging()
-        duration = args.duration if args.duration > 0 else float('inf')
-        if duration == float('inf'):
-            print("Recording started. Press 'q' to stop.")
-        else:
-            print(f"Recording started for {args.duration} seconds. Press 'q' to stop early.")
-        fig = plt.figure()
-        while time.time() - start_time < duration:
-            if plt.waitforbuttonpress(timeout=0.1):
-                if not duration == float('inf'):
-                    print("Recording stopped early by user.")
-                break
-            time.sleep(0.1)
+        camera_a.start_logging()
+        camera_b.start_logging()
         
-        thr_cam_obj_A.stop_logging()
-        thr_cam_obj_B.stop_logging()
-        print("Recording finished.")
-
-        raw_thr_frames_A = np.array(thr_cam_obj_A.logged_images)
-        raw_thr_tstamps_A = np.array(thr_cam_obj_A.logged_tstamps)
-        thr_cam_timestamp_offset_A = thr_cam_obj_A.timestamp_offset
-
-        raw_thr_frames_B = np.array(thr_cam_obj_B.logged_images)
-        raw_thr_tstamps_B = np.array(thr_cam_obj_B.logged_tstamps)
-        thr_cam_timestamp_offset_B = thr_cam_obj_B.timestamp_offset
-
-
-        np.savez(output_file, raw_thr_frames_A=raw_thr_frames_A, raw_thr_tstamps_A=raw_thr_tstamps_A, thr_cam_timestamp_offset_A=thr_cam_timestamp_offset_A,
-                raw_thr_frames_B=raw_thr_frames_B, raw_thr_tstamps_B=raw_thr_tstamps_B, thr_cam_timestamp_offset_B=thr_cam_timestamp_offset_B)
-        print(f"Data saved to {output_file}")
+        target_duration = duration if duration > 0 else float('inf')
+        
+        if duration == -1:
+            print("Recording started. Press any key to stop...")
+        else:
+            print(f"Recording started for {duration} seconds. Press any key to stop early...")
+        
+        # Create a matplotlib figure for key detection
+        fig = plt.figure(figsize=(1, 1))
+        plt.axis('off')
+        plt.title('Recording... Press any key to stop')
+        plt.show(block=False)
+        
+        # Recording loop with progress tracking
+        if duration > 0:
+            with tqdm(total=duration, desc="Recording", unit="s") as pbar:
+                while time.time() - start_time < target_duration:
+                    elapsed = time.time() - start_time
+                    pbar.update(elapsed - pbar.n)
+                    
+                    # Check for user input to stop early
+                    if plt.waitforbuttonpress(timeout=0.1):
+                        print("\nRecording stopped early by user.")
+                        break
+                    time.sleep(0.1)
+        else:
+            # Manual stop mode
+            while time.time() - start_time < target_duration:
+                if plt.waitforbuttonpress(timeout=0.1):
+                    elapsed = time.time() - start_time
+                    print(f"\nRecording stopped after {elapsed:.1f} seconds.")
+                    break
+                time.sleep(0.1)
+        
+        plt.close(fig)
+        return True
+        
     except KeyboardInterrupt:
-        print("Saving interrupted by user.")
+        print("\nRecording interrupted by user.")
+        plt.close('all')
+        return True  # Still save partial data
+        
     finally:
-        thr_cam_obj_A.close()
-        thr_cam_obj_B.close()
+        camera_a.stop_logging()
+        camera_b.stop_logging()
+
+
+def save_dual_data(camera_a: BosonWithTelemetry, 
+                  camera_b: BosonWithTelemetry, 
+                  output_file: str, compress: bool = False) -> None:
+    """
+    Save recorded dual camera data to file.
+    
+    Args:
+        camera_a: First camera object with recorded data
+        camera_b: Second camera object with recorded data
+        output_file: Output file path
+        compress: Whether to compress the data using zstandard
+    """
+    print("Processing and saving dual camera data...")
+    
+    # Convert data to numpy arrays
+    raw_frames_a = np.array(camera_a.logged_images)
+    timestamps_a = np.array(camera_a.logged_tstamps)
+    timestamp_offset_a = camera_a.timestamp_offset
+    
+    raw_frames_b = np.array(camera_b.logged_images)
+    timestamps_b = np.array(camera_b.logged_tstamps)
+    timestamp_offset_b = camera_b.timestamp_offset
+    
+    print(f"Camera A captured {len(raw_frames_a)} frames")
+    print(f"Camera B captured {len(raw_frames_b)} frames")
+    
+    # Save all data with optional compression
+    if compress:
+        print("Compressing dual camera data...")
+        cctx = zstd.ZstdCompressor(level=3)  # Balance compression vs speed
+        
+        with open(output_file, 'wb') as f:
+            with cctx.stream_writer(f) as compressor:
+                np.savez(compressor,
+                        raw_thr_frames_A=raw_frames_a,
+                        raw_thr_tstamps_A=timestamps_a,
+                        thr_cam_timestamp_offset_A=timestamp_offset_a,
+                        raw_thr_frames_B=raw_frames_b,
+                        raw_thr_tstamps_B=timestamps_b,
+                        thr_cam_timestamp_offset_B=timestamp_offset_b)
+        print(f"Compressed dual camera data saved to: {output_file}")
+    else:
+        np.savez(output_file,
+                 raw_thr_frames_A=raw_frames_a,
+                 raw_thr_tstamps_A=timestamps_a,
+                 thr_cam_timestamp_offset_A=timestamp_offset_a,
+                 raw_thr_frames_B=raw_frames_b,
+                 raw_thr_tstamps_B=timestamps_b,
+                 thr_cam_timestamp_offset_B=timestamp_offset_b)
+        print(f"Dual camera data saved to: {output_file}")
+    
+    # Print file size info
+    file_size = Path(output_file).stat().st_size / (1024 * 1024)  # MB
+    print(f"File size: {file_size:.1f} MB")
+    
+    # Print synchronization info
+    if len(timestamps_a) > 0 and len(timestamps_b) > 0:
+        time_diff = abs(timestamps_a[0] - timestamps_b[0])
+        print(f"Camera synchronization offset: {time_diff*1000:.1f} ms")
+
+
+def cleanup_dual_cameras(camera_a: Optional[BosonWithTelemetry], 
+                        camera_b: Optional[BosonWithTelemetry]) -> None:
+    """
+    Properly cleanup both camera resources.
+    
+    Args:
+        camera_a: First camera object to cleanup
+        camera_b: Second camera object to cleanup
+    """
+    for camera, name in [(camera_a, "A"), (camera_b, "B")]:
+        if camera:
+            try:
+                camera.close()
+                print(f"Camera {name} resources cleaned up.")
+            except Exception as e:
+                print(f"Warning: Error cleaning up camera {name}: {e}")
+
+
+def main() -> None:
+    """Main function to orchestrate the dual camera recording process."""
+    args = parse_args()
+
+    # Prepare output path
+    output_path = Path("./dual_data") / args.output
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_file = str(output_path)
+
+    camera_a = None
+    camera_b = None
+    
+    try:
+        # Initialize both cameras
+        camera_a, camera_b = initialize_dual_cameras()
+        if not camera_a or not camera_b:
+            print("Failed to initialize both cameras. Exiting.")
+            sys.exit(1)
+
+        # Record data
+        if record_dual_thermal_data(camera_a, camera_b, args.duration):
+            save_dual_data(camera_a, camera_b, output_file, args.compress)
+            print("Dual camera recording completed successfully!")
+        else:
+            print("Recording was cancelled.")
+            
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        sys.exit(1)
+        
+    finally:
+        cleanup_dual_cameras(camera_a, camera_b)
+        plt.close('all')  # Ensure all matplotlib figures are closed
 
 
 if __name__ == "__main__":
