@@ -1,3 +1,5 @@
+import sys
+
 import argparse
 import time
 import cv2
@@ -5,12 +7,15 @@ import numpy as np
 from tqdm import tqdm
 from pathlib import Path
 
+import zstandard as zstd
+
 from wrapper_boson import BosonWithTelemetry
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Record thermal video from a Boson camera.")
     parser.add_argument('--output', type=str, help='Output file path.', required=True)
     parser.add_argument('--duration', type=int, default=10, help='Duration of the recording in seconds.')
+    parser.add_argument('--compress', action='store_true', help='Compress the output file.')
     return parser.parse_args()
 
 def main():
@@ -20,12 +25,12 @@ def main():
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_file = str(output_path)
 
-
     try:
         thr_cam_obj = BosonWithTelemetry()
     except:
         print("Failed to connect to thermal camera")
         sys.exit()
+    thr_cam_obj.camera.set_ffc_manual()
     thr_cam_obj.camera.do_ffc()
     time.sleep(1)
 
@@ -46,16 +51,25 @@ def main():
         time.sleep(0.1)
     
     thr_cam_obj.stop_logging()
+    thr_cam_obj.camera.set_ffc_auto()
+    thr_cam_obj.stop()
+    thr_cam_obj.close()
     print("Recording finished.")
 
     raw_thr_frames = np.array(thr_cam_obj.logged_images)
     raw_thr_tstamps = np.array(thr_cam_obj.logged_tstamps)
     thr_cam_timestamp_offset = thr_cam_obj.timestamp_offset
 
-    np.savez(output_file, raw_thr_frames=raw_thr_frames, raw_thr_tstamps=raw_thr_tstamps, thr_cam_timestamp_offset=thr_cam_timestamp_offset)
-    print(f"Data saved to {output_file}")
+    if args.compress:
+        cctx = zstd.ZstdCompressor(level=3)
+        with open(output_file, 'wb') as f:
+            with cctx.stream_writer(f) as compressor:
+                np.savez(compressor, raw_thr_frames=raw_thr_frames, raw_thr_tstamps=raw_thr_tstamps, thr_cam_timestamp_offset=thr_cam_timestamp_offset)
+        print(f"Compressed data saved to {output_file}")
+    else:
+        np.savez(output_file, raw_thr_frames=raw_thr_frames, raw_thr_tstamps=raw_thr_tstamps, thr_cam_timestamp_offset=thr_cam_timestamp_offset)
+        print(f"Data saved to {output_file}")
 
-    thr_cam_obj.close()
 
 
 if __name__ == "__main__":
