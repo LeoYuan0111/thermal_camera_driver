@@ -86,7 +86,9 @@ def load_thermal_data(file_path: str, is_dual: bool = False) -> Dict[str, Any]:
             
             # Load decompressed data using BytesIO
             import io
-            data = np.load(io.BytesIO(decompressed_data))
+            with np.load(io.BytesIO(decompressed_data), allow_pickle=False) as npz_data:
+                # Convert the NpzFile to a regular dictionary
+                data = {key: npz_data[key] for key in npz_data.files}
             print("Successfully loaded compressed data file")
             
         except Exception as decomp_error:
@@ -100,11 +102,12 @@ def load_thermal_data(file_path: str, is_dual: bool = False) -> Dict[str, Any]:
         required_keys = ['raw_thr_frames', 'raw_thr_tstamps', 'thr_cam_timestamp_offset']
     
     # Check if all required keys exist
-    missing_keys = [key for key in required_keys if key not in data.files]
+    data_keys = list(data.files) if hasattr(data, 'files') else list(data.keys())
+    missing_keys = [key for key in required_keys if key not in data_keys]
     if missing_keys:
-        raise ValueError(f"Missing keys in data file: {missing_keys}")
+        raise ValueError(f"Missing keys in data file: {missing_keys}. Available keys: {data_keys}")
     
-    return dict(data)
+    return dict(data) if hasattr(data, 'files') else data
 
 
 def display_statistics(data: Dict[str, Any], is_dual: bool = False) -> None:

@@ -204,30 +204,30 @@ def save_dual_data(camera_a: BosonWithTelemetry,
     print(f"Camera A captured {len(raw_frames_a)} frames")
     print(f"Camera B captured {len(raw_frames_b)} frames")
     
-    # Save all data with optional compression
+    np.savez(output_file,
+                raw_thr_frames_A=raw_frames_a,
+                raw_thr_tstamps_A=timestamps_a,
+                thr_cam_timestamp_offset_A=timestamp_offset_a,
+                raw_thr_frames_B=raw_frames_b,
+                raw_thr_tstamps_B=timestamps_b,
+                thr_cam_timestamp_offset_B=timestamp_offset_b)
+    print(f"Dual camera data saved to: {output_file}")
+
     if compress:
-        print("Compressing dual camera data...")
-        cctx = zstd.ZstdCompressor(level=3)  # Balance compression vs speed
-        
-        with open(output_file, 'wb') as f:
-            with cctx.stream_writer(f) as compressor:
-                np.savez(compressor,
-                        raw_thr_frames_A=raw_frames_a,
-                        raw_thr_tstamps_A=timestamps_a,
-                        thr_cam_timestamp_offset_A=timestamp_offset_a,
-                        raw_thr_frames_B=raw_frames_b,
-                        raw_thr_tstamps_B=timestamps_b,
-                        thr_cam_timestamp_offset_B=timestamp_offset_b)
-        print(f"Compressed dual camera data saved to: {output_file}")
-    else:
-        np.savez(output_file,
-                 raw_thr_frames_A=raw_frames_a,
-                 raw_thr_tstamps_A=timestamps_a,
-                 thr_cam_timestamp_offset_A=timestamp_offset_a,
-                 raw_thr_frames_B=raw_frames_b,
-                 raw_thr_tstamps_B=timestamps_b,
-                 thr_cam_timestamp_offset_B=timestamp_offset_b)
-        print(f"Dual camera data saved to: {output_file}")
+        # Use command line to compress the file
+        import subprocess
+        compressed_file = output_file + ".zst"
+        print(f"Compressing with zstd...")
+        try:
+            subprocess.run(["zstd", "-f", output_file, "-o", compressed_file], check=True)
+            print(f"Compressed file saved to: {compressed_file}")
+            output_file = compressed_file
+            # Remove uncompressed file
+            Path(output_file[:-4]).unlink(missing_ok=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Warning: Compression failed: {e}")
+        except FileNotFoundError:
+            print("Warning: zstd command not found. Install zstd to enable compression.")
     
     # Print file size info
     file_size = Path(output_file).stat().st_size / (1024 * 1024)  # MB

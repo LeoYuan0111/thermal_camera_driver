@@ -147,23 +147,27 @@ def save_data(camera: BosonWithTelemetry, output_file: str, compress: bool) -> N
     
     print(f"Captured {len(raw_frames)} frames")
     
+    np.savez(output_file, 
+            raw_thr_frames=raw_frames,
+            raw_thr_tstamps=timestamps,
+            thr_cam_timestamp_offset=timestamp_offset)
+    print(f"Data saved to: {output_file}")
+
     if compress:
-        print("Compressing data...")
-        cctx = zstd.ZstdCompressor(level=3)  # Balance compression vs speed
-        
-        with open(output_file, 'wb') as f:
-            with cctx.stream_writer(f) as compressor:
-                np.savez(compressor, 
-                        raw_thr_frames=raw_frames,
-                        raw_thr_tstamps=timestamps,
-                        thr_cam_timestamp_offset=timestamp_offset)
-        print(f"Compressed data saved to: {output_file}")
-    else:
-        np.savez(output_file, 
-                raw_thr_frames=raw_frames,
-                raw_thr_tstamps=timestamps,
-                thr_cam_timestamp_offset=timestamp_offset)
-        print(f"Data saved to: {output_file}")
+        # Use command line to compress the file
+        import subprocess
+        compressed_file = output_file + ".zst"
+        print(f"Compressing with zstd...")
+        try:
+            subprocess.run(["zstd", "-f", output_file, "-o", compressed_file], check=True)
+            print(f"Compressed file saved to: {compressed_file}")
+            output_file = compressed_file
+            # Remove uncompressed file
+            Path(output_file[:-4]).unlink(missing_ok=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Warning: Compression failed: {e}")
+        except FileNotFoundError:
+            print("Warning: zstd command not found. Install zstd to enable compression.")
     
     # Print file size info
     file_size = Path(output_file).stat().st_size / (1024 * 1024)  # MB
@@ -216,3 +220,7 @@ def main() -> None:
         
     finally:
         cleanup_camera(camera)
+
+
+if __name__ == "__main__":
+    main()
