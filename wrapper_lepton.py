@@ -44,7 +44,9 @@ class LeptonWrapper:
         """
         logging.basicConfig(level=loglevel)
 
-        self._camera = Lepton(device=device)
+        self._camera = Lepton(loglevel=loglevel)
+        if device is not None:
+            self._camera.setup_video(device)
 
         self.logged_images: list = []
         self.logged_tstamps: list = []
@@ -77,18 +79,22 @@ class LeptonWrapper:
 
     def stop(self) -> None:
         """Signal the background thread to stop and wait for it to finish."""
+        if not hasattr(self, "_running"):
+            return
         self._running.clear()
-        self._thread.join(timeout=5.0)
-        if self._thread.is_alive():
-            logging.warning("LeptonWrapper: capture thread did not stop within timeout.")
+        if hasattr(self, "_thread"):
+            self._thread.join(timeout=5.0)
+            if self._thread.is_alive():
+                logging.warning("LeptonWrapper: capture thread did not stop within timeout.")
 
     def close(self) -> None:
         """Stop the capture thread and release the camera."""
         self.stop()
-        try:
-            self._camera.close()
-        except Exception as e:
-            logging.warning(f"LeptonWrapper: error closing camera: {e}")
+        if hasattr(self, "_camera"):
+            try:
+                self._camera.release()
+            except Exception as e:
+                logging.warning(f"LeptonWrapper: error closing camera: {e}")
 
     # ------------------------------------------------------------------
     # Background capture loop
