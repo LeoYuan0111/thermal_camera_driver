@@ -1,20 +1,21 @@
 # Thermal Camera Driver
 
-A Python driver system for FLIR Boson thermal cameras with telemetry support. This project provides tools for recording thermal video data from single or dual camera setups.
+A Python driver system for FLIR thermal cameras. Supports **FLIR Boson** (with telemetry) and **FLIR Lepton** cameras for recording thermal video data.
 
 ## Features
 
 - Support for single and dual FLIR Boson camera recording
+- Support for FLIR Lepton camera recording
 - Real-time thermal video display with colormap visualization
-- Telemetry data extraction (timestamps, frame numbers)
+- Telemetry data extraction for Boson (timestamps, frame numbers)
 - Data compression support using Zstandard
 - Configurable recording duration
-- Manual FFC (Flat Field Correction) control
+- Manual FFC (Flat Field Correction) control for Boson
 
 ## Hardware Requirements
 
-- FLIR Boson thermal camera(s)
-- USB connection or serial interface
+- FLIR Boson or FLIR Lepton thermal camera
+- USB connection (Lepton also supports SPI)
 - Compatible operating system (Windows, Linux, macOS)
 
 ## Installation
@@ -42,7 +43,9 @@ pip install -r requirements.txt
 
 ### 3. Hardware Setup
 
-Ensure your FLIR Boson camera is properly connected via USB and recognized by your system. You may need to install FLIR drivers separately.
+**Boson:** Connect via USB and ensure FLIR drivers are installed.
+
+**Lepton:** Connect via USB (PureThermal board) or SPI. No additional drivers are required beyond `flirpy`.
 
 ## Usage
 
@@ -65,7 +68,36 @@ python record_thermal_video.py --output "recordings/thermal_video.npz" --duratio
 python record_thermal_video.py --output "data/test_recording.npz" --duration 60 --compress
 ```
 
-### Dual Camera Recording
+### Lepton Camera Recording
+
+Record thermal video from a FLIR Lepton camera:
+
+```bash
+python record_thermal_video_lepton.py --output "lepton_recordings/recording.npz" --duration 30
+```
+
+**Parameters:**
+- `--output`: Output file path (required)
+- `--duration`: Recording duration in seconds (default: 10)
+- `--compress`: Enable zstandard compression (optional)
+
+**Example:**
+```bash
+# Record 60 seconds with compression
+python record_thermal_video_lepton.py --output "lepton_recordings/test.npz" --duration 60 --compress
+```
+
+The Lepton handles FFC (flat field correction) automatically — no manual calibration step is needed.
+
+### Live Preview (Lepton)
+
+```bash
+python wrapper_lepton.py
+```
+
+Displays the live feed with an inferno colormap. Press 'q' to quit.
+
+### Dual Camera Recording (Boson)
 
 Record synchronized thermal video from two Boson cameras:
 
@@ -83,15 +115,13 @@ python record_dual_thermal_video.py --output "dual_recording.npz" --duration 120
 python record_dual_thermal_video.py --output "experiment_001.npz"
 ```
 
-### Live Preview
-
-View live thermal camera feed with visualization:
+### Live Preview (Boson)
 
 ```bash
 python wrapper_boson.py
 ```
 
-This will open a window showing the thermal camera feed with a turbo colormap. Press 'q' to quit.
+Displays the live feed with a turbo colormap. Press 'q' to quit.
 
 ## Data Format
 
@@ -154,15 +184,18 @@ thermal_camera_driver/
 ├── config.ini                    # Configuration settings
 ├── .gitignore                    # Git ignore rules
 │
-├── wrapper_boson.py              # Boson camera wrapper class
-├── record_thermal_video.py       # Single camera recording script
-├── record_dual_thermal_video.py  # Dual camera recording script
-├── analyze_data.py               # Data analysis and visualization
-├── test_camera.py                # Camera connection test script
+├── wrapper_boson.py                   # Boson camera wrapper class
+├── wrapper_lepton.py                  # Lepton camera wrapper class
+├── record_thermal_video.py            # Boson single camera recording script
+├── record_thermal_video_lepton.py     # Lepton recording script
+├── record_dual_thermal_video.py       # Boson dual camera recording script
+├── analyze_data.py                    # Data analysis and visualization
+├── test_camera.py                     # Camera connection test script
 │
-├── recordings/                   # Single camera recordings (auto-created)
-├── dual_data/                    # Dual camera recordings (auto-created)
-└── exported_frames/              # Exported frame images (auto-created)
+├── recordings/                        # Boson recordings (auto-created)
+├── lepton_recordings/                 # Lepton recordings (auto-created)
+├── dual_data/                         # Dual Boson recordings (auto-created)
+└── exported_frames/                   # Exported frame images (auto-created)
 ```
 
 ## Quick Start
@@ -200,38 +233,56 @@ python test_camera.py --dual
 
 4. **Start Recording**:
 ```bash
-# Single camera
+# Boson single camera
 python record_thermal_video.py --output my_recording.npz --duration 30
 
-# Dual camera
+# Lepton camera
+python record_thermal_video_lepton.py --output lepton_recording.npz --duration 30
+
+# Boson dual camera
 python record_dual_thermal_video.py --output dual_recording.npz --duration 60
 ```
 
 ## Configuration
 
-### Camera Settings
+### Boson Camera Settings
 
-The system automatically configures the camera with these settings:
+The system automatically configures the Boson with these settings:
 - Resolution: 640x514 pixels (including 2-row telemetry)
 - Format: Y16 (16-bit grayscale)
 - Buffer size: 1 frame
 - FFC: Manual mode (performed at startup)
 
-### Telemetry Data
+### Lepton Camera Settings
 
-Telemetry information is extracted from the first two rows of each frame:
+The Lepton is configured automatically by `flirpy`:
+- Resolution: 160x120 (Lepton 3/3.5) or 80x60 (Lepton 2)
+- FFC: Automatic (handled by the camera hardware)
+- Timestamps: System clock (`time.time()`)
+
+### Telemetry Data (Boson only)
+
+Telemetry information is extracted from the first two rows of each Boson frame:
 - Frame counter (bytes 42-43)
 - Timestamp in milliseconds (bytes 140-141)
 
 ## Troubleshooting
 
 ### Camera Connection Issues
+
+**Boson:**
 - **Run the test script first**: `python test_camera.py`
 - Verify the camera is properly connected via USB
 - Check that FLIR drivers are installed
 - Ensure no other applications are using the camera
 - Try different USB ports or cables
 - For dual cameras, verify COM port assignments in [config.ini](config.ini)
+
+**Lepton:**
+- Ensure `flirpy` is installed: `pip install flirpy`
+- Verify the PureThermal board (or equivalent) is connected via USB
+- On Linux, you may need to add your user to the `video` group: `sudo usermod -aG video $USER`
+- Note: the Lepton performs automatic FFC (shutter events) periodically — brief frame artifacts during FFC are normal
 
 ### Permission Errors
 - Run the application as administrator (Windows) or with sudo (Linux)
