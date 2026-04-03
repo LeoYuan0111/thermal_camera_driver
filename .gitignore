@@ -30,6 +30,7 @@ Thumbs.db
 # Data directories
 recordings/
 lepton_recordings/
+boson_lepton_data/
 dual_data/
 data/
 

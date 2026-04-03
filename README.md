@@ -6,6 +6,7 @@ A Python driver system for FLIR thermal cameras. Supports **FLIR Boson** (with t
 
 - Support for single and dual FLIR Boson camera recording
 - Support for FLIR Lepton camera recording
+- Simultaneous Boson + Lepton recording with synchronized telemetry
 - Real-time thermal video display with colormap visualization
 - Telemetry data extraction for Boson (timestamps, frame numbers)
 - Data compression support using Zstandard
@@ -115,6 +116,30 @@ python record_dual_thermal_video.py --output "dual_recording.npz" --duration 120
 python record_dual_thermal_video.py --output "experiment_001.npz"
 ```
 
+### Boson + Lepton Simultaneous Recording
+
+Record synchronized thermal video from a Boson and a Lepton camera:
+
+```bash
+python record_boson_lepton_video.py --output "recording.npz" --duration 60
+```
+
+**Parameters:**
+- `--output`: Output file name (required, stored in `./boson_lepton_data/`)
+- `--duration`: Recording duration in seconds (default: -1 for manual stop)
+- `--compress`: Enable zstandard compression (optional)
+
+**Example:**
+```bash
+# Record 2 minutes with compression
+python record_boson_lepton_video.py --output "experiment_001.npz" --duration 120 --compress
+
+# Record until manually stopped
+python record_boson_lepton_video.py --output "continuous.npz"
+```
+
+The Boson is expected on device 1 / COM4 by default (edit `initialize_cameras()` if your setup differs). The Lepton is auto-detected.
+
 ### Live Preview (Boson)
 
 ```bash
@@ -132,10 +157,20 @@ Recorded data is saved as NumPy archive files (.npz) containing:
 - `raw_thr_tstamps`: Timestamps for each frame
 - `thr_cam_timestamp_offset`: Camera timestamp offset
 
-### Dual Camera:
+### Dual Boson Camera:
 - `raw_thr_frames_A/B`: Arrays of thermal frames from camera A/B
 - `raw_thr_tstamps_A/B`: Timestamps for each frame from camera A/B
 - `thr_cam_timestamp_offset_A/B`: Camera timestamp offsets
+
+### Boson + Lepton:
+- `raw_thr_frames_boson`: Boson frames (with 2-row telemetry header)
+- `raw_thr_tstamps_boson`: Boson system timestamps
+- `thr_cam_timestamp_offset_boson`: Boson system−camera time offset
+- `raw_thr_frames_lepton`: Lepton frames (with 2-row telemetry footer)
+- `raw_thr_tstamps_lepton`: Lepton system timestamps
+- `thr_cam_timestamp_offset_lepton`: Lepton system−camera time offset
+- `raw_thr_cam_tstamps_lepton`: Lepton camera-clock timestamps
+- `raw_thr_frame_numbers_lepton`: Lepton frame counter from telemetry
 
 ## Data Analysis
 
@@ -150,10 +185,16 @@ frames = data['raw_thr_frames']
 timestamps = data['raw_thr_tstamps']
 offset = data['thr_cam_timestamp_offset']
 
-# Load dual camera data
+# Load dual Boson data
 dual_data = np.load('dual_recording.npz')
 frames_a = dual_data['raw_thr_frames_A']
 frames_b = dual_data['raw_thr_frames_B']
+
+# Load Boson + Lepton data
+bl_data = np.load('boson_lepton_recording.npz')
+boson_frames = bl_data['raw_thr_frames_boson']
+lepton_frames = bl_data['raw_thr_frames_lepton']
+lepton_cam_ts = bl_data['raw_thr_cam_tstamps_lepton']
 ```
 
 ### Analysis Tools
@@ -189,12 +230,14 @@ thermal_camera_driver/
 ├── record_thermal_video.py            # Boson single camera recording script
 ├── record_thermal_video_lepton.py     # Lepton recording script
 ├── record_dual_thermal_video.py       # Boson dual camera recording script
+├── record_boson_lepton_video.py       # Boson + Lepton simultaneous recording
 ├── analyze_data.py                    # Data analysis and visualization
 ├── test_camera.py                     # Camera connection test script
 │
 ├── recordings/                        # Boson recordings (auto-created)
 ├── lepton_recordings/                 # Lepton recordings (auto-created)
 ├── dual_data/                         # Dual Boson recordings (auto-created)
+├── boson_lepton_data/                 # Boson + Lepton recordings (auto-created)
 └── exported_frames/                   # Exported frame images (auto-created)
 ```
 
@@ -241,6 +284,9 @@ python record_thermal_video_lepton.py --output lepton_recording.npz --duration 3
 
 # Boson dual camera
 python record_dual_thermal_video.py --output dual_recording.npz --duration 60
+
+# Boson + Lepton simultaneous
+python record_boson_lepton_video.py --output mixed_recording.npz --duration 60
 ```
 
 ## Configuration
@@ -260,11 +306,13 @@ The Lepton is configured automatically by `flirpy`:
 - FFC: Automatic (handled by the camera hardware)
 - Timestamps: System clock (`time.time()`)
 
-### Telemetry Data (Boson only)
+### Telemetry Data
 
-Telemetry information is extracted from the first two rows of each Boson frame:
-- Frame counter (bytes 42-43)
-- Timestamp in milliseconds (bytes 140-141)
+**Boson:** Telemetry is embedded in the first 2 rows of each frame:
+- Frame counter (words 42-43)
+- Timestamp in milliseconds (words 140-141)
+
+**Lepton:** Telemetry is embedded in the last 2 rows (footer) of each frame and parsed automatically by `LeptonWrapper`. Extracted fields include uptime, frame count, FPA/housing temperatures, FFC status, and AGC state. Camera-clock timestamps and frame numbers are saved as separate arrays in the .npz output.
 
 ## Troubleshooting
 

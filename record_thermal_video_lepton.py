@@ -147,8 +147,15 @@ def save_data(camera: LeptonWrapper, output_file: str, compress: bool) -> None:
     """
     Save recorded thermal data to a .npz file.
 
-    The key names (raw_thr_frames, raw_thr_tstamps, thr_cam_timestamp_offset)
-    match the Boson recording output so analyze_data.py works without changes.
+    The core key names (raw_thr_frames, raw_thr_tstamps,
+    thr_cam_timestamp_offset) match the Boson recording output so that
+    analyze_data.py works for both cameras.  Two additional Lepton-specific
+    arrays provide camera-clock timestamps and frame counters extracted from
+    the embedded telemetry footer.
+
+    Frames are saved WITH their 2-row telemetry footer (e.g. 122 rows for
+    Lepton 3).  Strip the last 2 rows to get the thermal-only image, or
+    parse them to recover per-frame telemetry.
 
     Args:
         camera: LeptonWrapper containing recorded data
@@ -163,16 +170,23 @@ def save_data(camera: LeptonWrapper, output_file: str, compress: bool) -> None:
 
     raw_frames = np.array(camera.logged_images)
     timestamps = np.array(camera.logged_tstamps)
-    timestamp_offset = camera.timestamp_offset  # 0.0 for Lepton
+    cam_tstamps = np.array(camera.logged_cam_tstamps)
+    frame_numbers = np.array(camera.logged_frame_numbers)
+    timestamp_offset = camera.timestamp_offset
 
+    thermal_h = raw_frames.shape[1] - 2
     print(f"Captured {len(raw_frames)} frames  "
-          f"(resolution: {raw_frames.shape[2]}x{raw_frames.shape[1]})")
+          f"(thermal: {raw_frames.shape[2]}x{thermal_h}, "
+          f"with telemetry: {raw_frames.shape[2]}x{raw_frames.shape[1]})")
+    print(f"Timestamp offset (system − camera): {timestamp_offset:.6f} s")
 
     np.savez(
         output_file,
         raw_thr_frames=raw_frames,
         raw_thr_tstamps=timestamps,
         thr_cam_timestamp_offset=timestamp_offset,
+        raw_thr_cam_tstamps=cam_tstamps,
+        raw_thr_frame_numbers=frame_numbers,
     )
     print(f"Data saved to: {output_file}")
 

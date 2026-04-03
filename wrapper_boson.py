@@ -56,8 +56,15 @@ class BosonWithTelemetry(ThreadedBoson):
 
     def __del__(self):
         """Cleanup resources when object is destroyed."""
-        self.stop()
-        self.camera.close()
+        try:
+            self.stop()
+        except Exception:
+            pass
+        if getattr(self, "camera", None) is not None:
+            try:
+                self.camera.close()
+            except Exception:
+                pass
     
     def stop_logging(self) -> None:
         """Stop logging thermal frames and timestamps."""
