@@ -267,24 +267,15 @@ def save_data(
     # -- Boson --
     raw_frames_boson = np.array(boson.logged_images)
     timestamps_boson = np.array(boson.logged_tstamps)
+    cam_tstamps_boson = np.array(boson.logged_cam_tstamps)
+    frame_numbers_boson = np.array(boson.logged_frame_numbers)
     offset_boson = boson.timestamp_offset
 
-    # ThreadedBoson callbacks may deliver frames with extra channel /
-    # trailing dimensions (e.g. H×W×3×1 uint8 when Y16 isn't active).
-    # Collapse to (N, H, W) so downstream tools get a clean 2-D frame.
-    if raw_frames_boson.ndim > 3:
-        raw_frames_boson = raw_frames_boson.squeeze()
-    if raw_frames_boson.ndim == 4 and raw_frames_boson.shape[-1] in (1, 3, 4):
-        import cv2
-        grey = []
-        for f in raw_frames_boson:
-            if f.shape[-1] == 3:
-                grey.append(cv2.cvtColor(f, cv2.COLOR_BGR2GRAY))
-            elif f.shape[-1] == 4:
-                grey.append(cv2.cvtColor(f, cv2.COLOR_BGRA2GRAY))
-            else:
-                grey.append(f[:, :, 0])
-        raw_frames_boson = np.array(grey)
+    # ThreadedBoson callbacks may deliver frames with an extra trailing
+    # channel dimension (e.g. H×W×1).  Squeeze it away but keep the
+    # telemetry header rows (first 2 rows of each 514-row frame) intact.
+    if raw_frames_boson.ndim == 4 and raw_frames_boson.shape[-1] == 1:
+        raw_frames_boson = raw_frames_boson[:, :, :, 0]
 
     print(f"Boson  captured {len(raw_frames_boson)} frames"
           f"  (shape per frame: {raw_frames_boson.shape[1:]})")
@@ -294,6 +285,8 @@ def save_data(
         raw_thr_frames=raw_frames_boson,
         raw_thr_tstamps=timestamps_boson,
         thr_cam_timestamp_offset=offset_boson,
+        raw_thr_cam_tstamps=cam_tstamps_boson,
+        raw_thr_frame_numbers=frame_numbers_boson,
     )
     print(f"  Boson data saved to: {boson_file}")
 
